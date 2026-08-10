@@ -4,4 +4,7 @@ __pycache__/
 *.pyc
 .DS_Store
 results/
-*.log
+*.log.terraform/
+terraform/.terraform/
+terraform/terraform.tfstate
+terraform/terraform.tfstate.backup
