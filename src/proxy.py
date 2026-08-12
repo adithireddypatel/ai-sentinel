@@ -1,4 +1,5 @@
-from fastapi import FastAPI, HTTPException, Request
+cat > src/proxy.py << 'EOF'
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from openai import OpenAI
 import boto3
@@ -12,21 +13,33 @@ from dotenv import load_dotenv
 load_dotenv()
 
 app = FastAPI(title="AI Sentinel Proxy")
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# CloudWatch client
-cloudwatch = boto3.client("cloudwatch", region_name=os.getenv("AWS_REGION"))
+# Lazy initialization
+client = None
+cloudwatch = None
 
-# Cost per token for gpt-4o-mini
+def get_client():
+    global client
+    if client is None:
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY not set")
+        client = OpenAI(api_key=api_key)
+    return client
+
+def get_cloudwatch():
+    global cloudwatch
+    if cloudwatch is None:
+        cloudwatch = boto3.client("cloudwatch", region_name=os.getenv("AWS_REGION", "ap-south-1"))
+    return cloudwatch
+
 INPUT_COST_PER_TOKEN  = 0.00000015
 OUTPUT_COST_PER_TOKEN = 0.0000006
 
-# Budget limits
-MONTHLY_BUDGET     = float(os.getenv("MONTHLY_BUDGET_USD", 5.0))
-ALERT_THRESHOLD    = float(os.getenv("ALERT_THRESHOLD_PERCENT", 80)) / 100
-KILL_THRESHOLD     = float(os.getenv("KILL_THRESHOLD_PERCENT", 100)) / 100
+MONTHLY_BUDGET  = float(os.getenv("MONTHLY_BUDGET_USD", 5.0))
+ALERT_THRESHOLD = float(os.getenv("ALERT_THRESHOLD_PERCENT", 80)) / 100
+KILL_THRESHOLD  = float(os.getenv("KILL_THRESHOLD_PERCENT", 100)) / 100
 
-# In-memory spend tracker
 session_spend = {"total_usd": 0.0, "call_count": 0, "killed": False}
 
 class ChatRequest(BaseModel):
@@ -43,7 +56,7 @@ class ChatResponse(BaseModel):
 
 def send_to_cloudwatch(metric_name: str, value: float, unit: str = "None"):
     try:
-        cloudwatch.put_metric_data(
+        get_cloudwatch().put_metric_data(
             Namespace="AISentinel",
             MetricData=[{
                 "MetricName": metric_name,
@@ -61,7 +74,6 @@ def check_budget(cost: float) -> str:
     spend = session_spend["total_usd"]
     budget = MONTHLY_BUDGET
     percent = (spend / budget) * 100
-
     if spend >= budget * KILL_THRESHOLD:
         session_spend["killed"] = True
         send_to_cloudwatch("KillSwitchActivated", 1)
@@ -84,41 +96,29 @@ def health():
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
-    # Check kill switch
     if session_spend["killed"]:
         raise HTTPException(
             status_code=429,
             detail="AI Sentinel kill switch activated — budget limit reached. All AI calls blocked."
         )
-
     start = time.time()
-
     try:
-        response = client.chat.completions.create(
+        response = get_client().chat.completions.create(
             model=request.model,
             messages=[{"role": "user", "content": request.message}]
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
     latency_ms = round((time.time() - start) * 1000)
-
-    # Calculate cost
     input_tokens  = response.usage.prompt_tokens
     output_tokens = response.usage.completion_tokens
     cost = (input_tokens * INPUT_COST_PER_TOKEN) + (output_tokens * OUTPUT_COST_PER_TOKEN)
-
-    # Track call
     session_spend["call_count"] += 1
-
-    # Check budget and send metrics to CloudWatch
     status = check_budget(cost)
     send_to_cloudwatch("CallCost", cost)
     send_to_cloudwatch("Latency", latency_ms, "Milliseconds")
     send_to_cloudwatch("TotalSpend", session_spend["total_usd"])
     send_to_cloudwatch("CallCount", 1, "Count")
-
-    # Log every call
     log = {
         "timestamp": datetime.utcnow().isoformat(),
         "user_id": request.user_id,
@@ -131,7 +131,6 @@ async def chat(request: ChatRequest):
         "status": status
     }
     print(json.dumps(log))
-
     return ChatResponse(
         response=response.choices[0].message.content,
         cost_usd=round(cost, 6),
@@ -139,3 +138,4 @@ async def chat(request: ChatRequest):
         latency_ms=latency_ms,
         status=status
     )
+EOF
