@@ -1,4 +1,3 @@
-cat > src/proxy.py << 'EOF'
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from openai import OpenAI
@@ -14,7 +13,6 @@ load_dotenv()
 
 app = FastAPI(title="AI Sentinel Proxy")
 
-# Lazy initialization
 client = None
 cloudwatch = None
 
@@ -22,8 +20,6 @@ def get_client():
     global client
     if client is None:
         api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            raise ValueError("OPENAI_API_KEY not set")
         client = OpenAI(api_key=api_key)
     return client
 
@@ -138,4 +134,3 @@ async def chat(request: ChatRequest):
         latency_ms=latency_ms,
         status=status
     )
-EOF
