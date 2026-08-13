@@ -26,6 +26,15 @@ Every AI API call goes through AI Sentinel first:
 - **Slack** — real-time alerts
 
 ## Architecture
+User Request → AI Sentinel Proxy → OpenAI API
+↓
+Cost + Latency Tracking
+↓
+AWS CloudWatch Metrics
+↓
+Grafana Dashboard (live visualization)
+↓
+Budget Check → Slack Alert / Kill Switch
 
 ## Quick Start
 ```bash
@@ -54,7 +63,7 @@ terraform apply
 - `POST /chat` — send a message through the sentinel proxy
 
 ## Demo
-🎥 Coming soon
+🎥 https://youtu.be/4Jy2agrx86g
 
 ## GitHub
 github.com/adithireddypatel/ai-sentinel
